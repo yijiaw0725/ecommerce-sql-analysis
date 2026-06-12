@@ -4,6 +4,7 @@ import os
 
 # 1. define where to put the database
 db_path = 'database/ecommerce.db'
+os.makedirs(os.path.dirname(db_path), exist_ok=True)  # create the folder if it doesn't exist yet
 conn = sqlite3.connect(db_path)
 
 # 2. define the table names
@@ -22,7 +23,7 @@ for table_name, file_name in csv_files.items():
         print(f"processing: {table_name}...")
         # read csv
         df = pd.read_csv(file_name)
-        # save into database, replace if already exsit
+        # save into database, replace if it already exists
         df.to_sql(table_name, conn, if_exists='replace', index=False)
         print(f"-> {table_name} Completed!")
     else:

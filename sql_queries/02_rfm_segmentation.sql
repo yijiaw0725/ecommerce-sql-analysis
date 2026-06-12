@@ -2,7 +2,7 @@
 =============================================================================
 Project Name: RFM Customer Segmentation
 Author: [Yijia]
-Descirption:
+Description:
 In this project, I built a model based on RFM (Recency, Frequency, Monetary).
 
 Core Tech:
@@ -12,12 +12,12 @@ Core Tech:
 =============================================================================
 */
 
--- 1. Caculate each customer's R, M, F values
+-- 1. Calculate each customer's R, F, M values
 WITH rfm_raw AS (
 SELECT
 c.customer_unique_id,
 -- R (Recency): How many days away from previous purchase
--- Use JulianDay to caculate date difference, use 2018-09-01 to mimic the date of analysis.
+-- Use JulianDay to calculate date difference, use 2018-09-01 to mimic the date of analysis.
 CAST(
 JULIANDAY('2018-09-01') - JULIANDAY(MAX(o.order_purchase_timestamp))
 AS INTEGER) AS recency_days,
@@ -34,20 +34,23 @@ WHERE o.order_status = 'delivered' -- only focus on delivered orders
 GROUP BY c.customer_unique_id
 ),
 
--- 2. use window funcition to score customers (from 1-5 with 5 highest)
+-- 2. use window functions to score customers (from 1-5 with 5 highest)
 rfm_scores AS (
 SELECT
 *,
--- R：Date Diff Bigger(Loner did not buy)Lower Scoe. So put big day diff in Bucket 1, and small day diff in Bucket 5.
+-- R: bigger date diff (longer since last purchase) = lower score. So big day diff goes in Bucket 1, small day diff in Bucket 5.
 NTILE(5) OVER (ORDER BY recency_days DESC) as r_score,
--- F: higher score for more times of purchase
-NTILE(5) OVER (ORDER BY frequency ASC) as f_score,
+-- F: higher score for more times of purchase.
+-- 97% of customers bought exactly once, so frequency alone has massive ties and
+-- NTILE would split them arbitrarily. Use monetary as a tie-breaker: among customers
+-- with the same frequency, higher spenders get the higher score.
+NTILE(5) OVER (ORDER BY frequency ASC, monetary ASC) as f_score,
 -- M: higher score for more total money spent
 NTILE(5) OVER (ORDER BY monetary ASC) as m_score
 FROM rfm_raw
 )
 
--- 3. Final Ouput: combine and segement customers
+-- 3. Final output: combine and segment customers
 SELECT
 customer_unique_id,
 recency_days,
@@ -56,15 +59,20 @@ monetary,
 r_score,
 f_score,
 m_score,
--- join socre: "555" would be a top customer
+-- joined score: "555" would be a top customer
 (r_score || f_score || m_score) as rfm_cell,
 -- Use business logic to segment
 CASE
-WHEN r_score >= 4 AND f_score >= 4 AND m_score >= 4 THEN 'Best (Core and Vaulable)'
+-- recent + frequent + high spend on all three dimensions
+WHEN r_score >= 4 AND f_score >= 4 AND m_score >= 4 THEN 'Best'
+-- solid on all three dimensions, just not top-tier
 WHEN r_score >= 3 AND f_score >= 3 AND m_score >= 3 THEN 'Loyal'
-WHEN r_score <= 2 AND recency_days <= 90 THEN 'New & Promising (New and Potential)'
-WHEN r_score <= 2 AND recency_days > 90 THEN 'At Risk (may lose)'
-ELSE 'Standard (Normal Customer)'
+-- first purchase within the last 90 days: too early to judge, worth nurturing
+WHEN recency_days <= 90 AND frequency = 1 THEN 'New & Promising'
+-- went quiet (bottom 40% on recency) but used to spend decently: worth winning back.
+-- The m_score filter keeps this segment actionable instead of lumping in every lapsed low-spender.
+WHEN r_score <= 2 AND m_score >= 3 THEN 'At Risk'
+ELSE 'Standard'
 END AS customer_segment
 FROM rfm_scores
 ORDER BY monetary DESC;
